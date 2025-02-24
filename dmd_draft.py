@@ -178,10 +178,10 @@ for i in range(10):
     plt.show()
 
 probe_points = [
-    (1.03e-5, 3.5e-6),
-    (1.5e-5, 4.0e-6),
-    (2.0e-5, 5.0e-6),
-    (2.5e-5, 6.0e-6)
+    (2.0e-5, 1.0e-5),
+    (2.0e-5, 1.5e-6),
+    (2.0e-5, 1.65e-5),
+    (1.0e-5, 0.75e-5)
 ]
 field_name = 'pressure'  # Field to analyze and visualize
 
@@ -211,7 +211,7 @@ plt.show()
 fig, ax = plt.subplots(figsize=(12, 6))
 fs = 1 / (1.25e-8)  # Sampling frequency in Hz
 for i, series in enumerate(pressure_series_list):
-    f, Pxx = signal.welch(series, fs, nperseg=256)
+    f, Pxx = signal.welch(series, fs, nperseg=200)
     f_khz = f / 1000  # Convert to kHz
     ax.semilogy(f_khz, Pxx, color=colors[i], label=f'Probe {i+1}')
 ax.set_xlabel('Frequency (kHz)')
