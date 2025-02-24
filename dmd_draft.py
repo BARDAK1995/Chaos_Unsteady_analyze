@@ -4,6 +4,7 @@ from pydmd import DMD
 from matplotlib.patches import Circle
 from scipy import signal
 from MS_unsteady_Analysis_lib import *
+from matplotlib.patches import Ellipse  # Add this import at the top of your file
 # Example usage
 # flow_field = FlowFieldData("all_slices_x_1.00e-05.npz")
 # print_data_summary(flow_field)
@@ -98,7 +99,6 @@ temperature_data_corrected=temperature_data[:,:]
 X = temperature_data_corrected.reshape((temperature_data_corrected.shape[0], -1)).T
 # Mean subtraction
 X_mean = np.mean(X, axis=1, keepdims=True)
-
 X_centered = X - X_mean
 
 # Perform DMD with 10 modes
@@ -108,8 +108,6 @@ dmd = DMD(
     opt=True,             # Optimized DMD implementation
     tikhonov_regularization=None  # No regularization for vanilla analysis
 )
-
-
 dmd.fit(X_centered)
 # Get coordinates from a snapshot
 dt = 5e-9  # timestep in seconds
@@ -142,7 +140,6 @@ cylinder_diameter = 6e-6  # diameter
 
 # Plot modes with frequencies in titles
 for i in range(10):
-    
     plt.figure(figsize=(10, 8))
     yi, zi, interpolated_temp = interpolate_2d_data(
         y, z, 
@@ -153,15 +150,22 @@ for i in range(10):
         sphere_radius=flow_field.sphere_diameter / 2,
         scale_z=flow_field.scale_z
     )
-    # yi, zi, interpolated_temp = interpolate_2d_data(y, z, 
-    #                                             (dmd.modes[:, i]).real/A_x_scale_correction[12,:])
     im = plt.pcolormesh(yi, zi, interpolated_temp, shading='auto', cmap='coolwarm')
     plt.colorbar(im, label=f'Mode {i+1} Magnitude')
 
-    # Add cylinder as a circle
-    circle = Circle((cylinder_y, cylinder_z), cylinder_diameter/2,
-                   fill=True, color='black', alpha=0.1)
-    plt.gca().add_patch(circle)
+    # Add the ellipse with orange crosshatch
+    ellipse = Ellipse(
+        xy=(flow_field.sphere_center_y, flow_field.sphere_center_z),  # Center
+        width=flow_field.sphere_diameter,                             # Full width
+        height=flow_field.sphere_diameter * flow_field.scale_z,       # Scaled height
+        angle=0,                                                      # No rotation
+        fill=False,                                                   # No solid fill
+        edgecolor='orange',                                           # Edge color
+        hatch='+',                                                    # Crosshatch pattern
+        linewidth=2,                                                  # Thicker lines for visibility
+        alpha=0.7                                                     # Transparency
+    )
+    plt.gca().add_patch(ellipse)
     
     # Add labels and title with frequency
     plt.xlabel('Y Position')
@@ -173,55 +177,62 @@ for i in range(10):
     plt.tight_layout()
     plt.show()
 
+probe_points = [
+    (1.03e-5, 3.5e-6),
+    (1.5e-5, 4.0e-6),
+    (2.0e-5, 5.0e-6),
+    (2.5e-5, 6.0e-6)
+]
+field_name = 'pressure'  # Field to analyze and visualize
 
+# Get time series data for all probe points
+times, probe_coords, pressure_series_list = get_time_series_at_locations(flow_field, probe_points, field_name)
 
-# Example usage:
-target_y = 1.03e-5  # Example y coordinate
-target_z = 3.5e-6     # Example z coordinate
-field_name = 'pressure'  # or any other available field
+# Get timesteps for selecting a snapshot
+timesteps = flow_field.get_timesteps()
 
-# Get time series data
-times, pressure_values = get_time_series_at_location(flow_field, target_y, target_z, field_name)
+# Plot the flow field with probe points at the first timestep
+plot_flow_field_with_probes(flow_field, timesteps[0], field_name, probe_coords)
 
-# Create figure with two subplots
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-
-# Plot time series
-ax1.plot(times*1e6, pressure_values, 'b-', linewidth=2)
-ax1.set_xlabel('Time (μs)')
-ax1.set_ylabel(f'{field_name.capitalize()}')
-ax1.set_title(f'{field_name.capitalize()} Time Series at (y={target_y:.2e}, z={target_z:.2e})')
-ax1.grid(True)
-
-# Calculate PSD using Welch's method
-fs = 1/(1.25e-8)  # Sampling frequency in Hz
-f, Pxx = signal.welch(pressure_values, fs, nperseg=256)
-
-# Convert frequency to kHz for better readability
-f_khz = f/1000
-
-# Plot PSD
-ax2.semilogy(f_khz, Pxx)
-ax2.set_xlabel('Frequency (kHz)')
-ax2.set_ylabel('PSD')
-ax2.set_title('Power Spectral Density')
-ax2.grid(True)
-
-plt.tight_layout()
+# Create figure for time series
+fig, ax = plt.subplots(figsize=(12, 6))
+colors = ['b', 'g', 'r', 'c']  # Colors for four probe points
+for i, (probe_coord, series) in enumerate(zip(probe_coords, pressure_series_list)):
+    ax.plot(times * 1e6, series, color=colors[i], 
+            label=f'Probe {i+1}: y={probe_coord[0]:.2e}, z={probe_coord[1]:.2e}')
+ax.set_xlabel('Time (μs)')
+ax.set_ylabel(f'{field_name.capitalize()}')
+ax.set_title(f'{field_name.capitalize()} Time Series at Probe Points')
+ax.grid(True)
+ax.legend()
 plt.show()
 
-# Print dominant frequencies
-peak_indices = signal.find_peaks(Pxx)[0]
-dominant_freqs = f_khz[peak_indices]
-dominant_powers = Pxx[peak_indices]
+# Create figure for PSD
+fig, ax = plt.subplots(figsize=(12, 6))
+fs = 1 / (1.25e-8)  # Sampling frequency in Hz
+for i, series in enumerate(pressure_series_list):
+    f, Pxx = signal.welch(series, fs, nperseg=256)
+    f_khz = f / 1000  # Convert to kHz
+    ax.semilogy(f_khz, Pxx, color=colors[i], label=f'Probe {i+1}')
+ax.set_xlabel('Frequency (kHz)')
+ax.set_ylabel('PSD')
+ax.set_title('Power Spectral Density at Probe Points')
+ax.grid(True)
+ax.legend()
+plt.show()
 
-# Sort by power
-sorted_indices = np.argsort(dominant_powers)[::-1]
-dominant_freqs = dominant_freqs[sorted_indices]
-dominant_powers = dominant_powers[sorted_indices]
+# # Print dominant frequencies
+# peak_indices = signal.find_peaks(Pxx)[0]
+# dominant_freqs = f_khz[peak_indices]
+# dominant_powers = Pxx[peak_indices]
 
-print("\nDominant frequencies (top 5):")
-print("Frequency (kHz) | Power")
-print("-" * 30)
-for freq, power in zip(dominant_freqs[:5], dominant_powers[:5]):
-    print(f"{freq:13.2f} | {power:.2e}")
+# # Sort by power
+# sorted_indices = np.argsort(dominant_powers)[::-1]
+# dominant_freqs = dominant_freqs[sorted_indices]
+# dominant_powers = dominant_powers[sorted_indices]
+
+# print("\nDominant frequencies (top 5):")
+# print("Frequency (kHz) | Power")
+# print("-" * 30)
+# for freq, power in zip(dominant_freqs[:5], dominant_powers[:5]):
+#     print(f"{freq:13.2f} | {power:.2e}")

@@ -553,50 +553,55 @@ def interpolate_2d_data(y_coords: np.ndarray,
 
     return yi, zi, interpolated_values
 
-def get_time_series_at_location(flow_field: FlowFieldData, 
-                              target_y: float, 
-                              target_z: float, 
-                              field: str) -> Tuple[np.ndarray, np.ndarray]:
+
+def get_time_series_at_locations(flow_field: FlowFieldData, 
+                                 probe_points: List[Tuple[float, float]], 
+                                 field: str) -> Tuple[np.ndarray, List[Tuple[float, float]], List[np.ndarray]]:
     """
-    Get time series data from the cell closest to the specified (y,z) coordinates.
+    Get time series data from the cells closest to the specified (y,z) coordinates.
     
     Args:
-        flow_field: FlowFieldData object
-        target_y: Y coordinate of interest
-        target_z: Z coordinate of interest
+        flow_field: FlowFieldData object containing the flow field data
+        probe_points: List of (y, z) tuples specifying the probe locations
         field: Name of the field to extract (e.g., 'pressure', 'temperature', etc.)
     
     Returns:
-        times: Array of timesteps
-        values: Array of field values at the specified location
+        times: Array of timesteps in seconds
+        probe_coords: List of (y, z) tuples of the actual closest data points
+        time_series_list: List of arrays, each containing the time series for a probe point
     """
-    # Get first snapshot to find the closest point
+    # Get timesteps and first snapshot to determine coordinates
     timesteps = flow_field.get_timesteps()
     first_snapshot = flow_field.get_snapshot(timesteps[0])
     y, z = first_snapshot.get_coordinates()
     
-    # Calculate distances to all points
-    distances = np.sqrt((y - target_y)**2 + (z - target_z)**2)
+    # Lists to store indices and actual coordinates of closest points
+    probe_indices = []
+    probe_coords = []
     
-    # Find index of closest point
-    closest_idx = np.argmin(distances)
+    # Find the closest data point for each probe location
+    for target_y, target_z in probe_points:
+        distances = np.sqrt((y - target_y)**2 + (z - target_z)**2)
+        closest_idx = np.argmin(distances)
+        min_distance = distances[closest_idx]
+        actual_y, actual_z = y[closest_idx], z[closest_idx]
+        
+        # Print information about the closest point
+        print(f"Probe at target (y={target_y:.2e}, z={target_z:.2e}):")
+        print(f"  Closest point at y={actual_y:.2e}, z={actual_z:.2e}")
+        print(f"  Distance: {min_distance:.2e} meters")
+        
+        probe_indices.append(closest_idx)
+        probe_coords.append((actual_y, actual_z))
     
-    # Get minimum distance
-    min_distance = distances[closest_idx]
+    # Extract time series for each probe point across all timesteps
+    times = np.array(timesteps) * 1.25e-8  # Convert to seconds
+    time_series_list = []
+    for idx in probe_indices:
+        series = np.array([flow_field.get_snapshot(ts).get_field_data(field)[idx] for ts in timesteps])
+        time_series_list.append(series)
     
-    # Extract time series data
-    times = np.array(timesteps) * 1.25e-8  # Convert to seconds using given timestep
-    values = np.zeros(len(timesteps))
-    
-    for i, ts in enumerate(timesteps):
-        snapshot = flow_field.get_snapshot(ts)
-        field_data = snapshot.get_field_data(field)
-        values[i] = field_data[closest_idx]
-    
-    print(f"Closest point found at y={y[closest_idx]:.2e}, z={z[closest_idx]:.2e}")
-    print(f"Distance from requested point: {min_distance:.2e} meters")
-    
-    return times, values
+    return times, probe_coords, time_series_list
 
 def plot_interpolated_field(y_coords: np.ndarray, 
                           z_coords: np.ndarray, 
@@ -728,4 +733,52 @@ def visualize_snapshot(flow_field: FlowFieldData,
         ax.set_ylabel('Z Position')
     
     plt.tight_layout()
+    plt.show()
+
+
+def plot_flow_field_with_probes(flow_field: FlowFieldData, 
+                                timestep: int, 
+                                field: str, 
+                                probe_coords: List[Tuple[float, float]], 
+                                cmap: str = 'coolwarm'):
+    """
+    Plot the flow field at a given timestep with probe points marked.
+    
+    Args:
+        flow_field: FlowFieldData object
+        timestep: Timestep index to visualize
+        field: Name of the field to plot (e.g., 'pressure')
+        probe_coords: List of (y, z) tuples of probe point coordinates
+        cmap: Colormap for the flow field plot (default: 'coolwarm')
+    """
+    # Get the snapshot data
+    snapshot = flow_field.get_snapshot(timestep)
+    y, z = snapshot.get_coordinates()
+    field_data = snapshot.get_field_data(field)
+    
+    # Interpolate the field to a uniform grid (assuming interpolate_2d_data exists)
+    yi, zi, interpolated_field = interpolate_2d_data(
+        y, z, field_data,
+        num_grid_points=100,
+        sphere_center_y=flow_field.sphere_center_y,
+        sphere_center_z=flow_field.sphere_center_z,
+        sphere_radius=flow_field.sphere_radius,
+        scale_z=flow_field.scale_z
+    )
+    
+    # Create the plot
+    plt.figure(figsize=(10, 8))
+    plt.pcolormesh(yi, zi, interpolated_field, shading='auto', cmap=cmap)
+    plt.colorbar(label=field.capitalize())
+    
+    # Overlay probe points
+    probe_y, probe_z = zip(*probe_coords)  # Unzip list of tuples into separate y and z lists
+    plt.scatter(probe_y, probe_z, color='red', s=50, label='Probe Points')
+    
+    # Customize plot
+    plt.xlabel('Y Position')
+    plt.ylabel('Z Position')
+    plt.title(f'{field.capitalize()} at Timestep {timestep} with Probe Points')
+    plt.gca().set_aspect('equal')  # Ensure aspect ratio reflects physical proportions
+    plt.legend()
     plt.show()
