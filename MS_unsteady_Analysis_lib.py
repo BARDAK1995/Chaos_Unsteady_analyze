@@ -13,6 +13,7 @@ from matplotlib.animation import FuncAnimation
 import matplotlib as mpl
 from matplotlib.patches import Rectangle
 import concurrent.futures
+from typing import Tuple
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,31 +45,76 @@ class Snapshot:
 class FlowFieldData:
     """Loads and manages flow field data"""
     def __init__(self, npz_file: str, 
-                 sphere_center_y: float, 
-                 sphere_center_z: float, 
-                 sphere_diameter: float):
+             sphere_center_y: float, 
+             sphere_center_z: float, 
+             sphere_diameter: float,
+             scale_z: float = 1.0):
         self.npz_file = npz_file
         self.sphere_center_y = sphere_center_y
         self.sphere_center_z = sphere_center_z
-        self.sphere_radius = sphere_diameter / 2
+        self.sphere_diameter = sphere_diameter  # Store diameter
+        self.sphere_radius = sphere_diameter / 2  # Compute and store radius
+        self.scale_z = scale_z
         self.snapshots: Dict[int, Snapshot] = {}
         self.x_position: float = None
         self.available_fields: Tuple[str] = None
         self._load_data()
 
+    def _apply_elliptical_mask(self, centers: np.ndarray, values: np.ndarray) -> None:
+        """Apply elliptical masking to the data in-place"""
+        y_coords = centers['y']
+        z_coords = centers['z']
+        dy = (y_coords - self.sphere_center_y) / self.sphere_radius
+        dz = (z_coords - self.sphere_center_z) / (self.sphere_radius * self.scale_z)
+        dist_sq = dy**2 + dz**2
+        mask = dist_sq <= 1.0  # Inside the ellipse if ≤ 1
+        print(f"Points inside mask: {np.sum(mask)} out of {len(y_coords)}")
+        for field in values.dtype.names:
+            if field != 'vol':  # Skip volume field
+                values[field][mask] = 0.0
+
     def _load_data(self):
         """Load and process data from NPY cache if available, otherwise from NPZ file"""
         logger.info(f"Loading and processing data...")
-        # Construct NPY cache filename from NPZ filename
         npy_cache = Path(self.npz_file).with_suffix('.npy')
         try:
-            # First try to load from NPY cache
+            # Try to load from NPY cache
             if npy_cache.exists():
                 logger.info(f"Loading from NPY cache: {npy_cache}")
                 cache_data = np.load(npy_cache, allow_pickle=True).item()
+                
+                # Check if mask parameters match current instance
+                params_match = (
+                    cache_data.get('sphere_center_y') == self.sphere_center_y and
+                    cache_data.get('sphere_center_z') == self.sphere_center_z and
+                    cache_data.get('sphere_diameter') == self.sphere_diameter and
+                    cache_data.get('scale_z') == self.scale_z
+                )
+                
                 self.x_position = cache_data['x_position']
                 self.available_fields = cache_data['available_fields']
                 self.snapshots = cache_data['snapshots']
+                
+                if not params_match:
+                    logger.info("Mask parameters have changed, reapplying mask to cached data")
+                    # Reapply mask to all snapshots in cache
+                    for snapshot in self.snapshots.values():
+                        self._apply_elliptical_mask(snapshot.centers, snapshot.values)
+                    # Update cache with new parameters after masking
+                    cache_data = {
+                        'x_position': self.x_position,
+                        'available_fields': self.available_fields,
+                        'snapshots': self.snapshots,
+                        'sphere_center_y': self.sphere_center_y,
+                        'sphere_center_z': self.sphere_center_z,
+                        'sphere_diameter': self.sphere_diameter,
+                        'scale_z': self.scale_z
+                    }
+                    logger.info(f"Updating NPY cache: {npy_cache}")
+                    np.save(npy_cache, cache_data)
+                else:
+                    logger.info(f"Mask parameters match, using cached data as-is")
+                
                 logger.info(f"Successfully loaded {len(self.snapshots)} snapshots from cache")
                 return
                 
@@ -79,22 +125,11 @@ class FlowFieldData:
                 self.available_fields = data['values'][0].dtype.names
                 
                 for i, timestep in enumerate(data['timesteps']):
-                    # Copy raw data
                     centers = data['centers'][i].copy()
                     values = data['values'][i].copy()
                     
-                    # ==== MODIFIED SPHERE MASKING ====
-                    # Calculate distance from sphere center (y-z plane)
-                    y_coords = centers['y']
-                    z_coords = centers['z']
-                    dist_sq = (y_coords - self.sphere_center_y)**2 + (z_coords - self.sphere_center_z)**2
-                    mask = dist_sq <= (self.sphere_radius)**2
-                    
-                    # Zero out all fields EXCEPT 'vol' within sphere
-                    for field in values.dtype.names:
-                        if field != 'vol':  # Skip volume field
-                            values[field][mask] = 0.0
-                    # ==== END MODIFIED MASKING ====
+                    # Apply elliptical masking
+                    self._apply_elliptical_mask(centers, values)
                     
                     self.snapshots[int(timestep)] = Snapshot(
                         timestep=int(timestep),
@@ -103,11 +138,15 @@ class FlowFieldData:
                         x_position=self.x_position
                     )
                 
-                # Create cache dictionary
+                # Create cache dictionary with mask parameters
                 cache_data = {
                     'x_position': self.x_position,
                     'available_fields': self.available_fields,
-                    'snapshots': self.snapshots
+                    'snapshots': self.snapshots,
+                    'sphere_center_y': self.sphere_center_y,
+                    'sphere_center_z': self.sphere_center_z,
+                    'sphere_diameter': self.sphere_diameter,
+                    'scale_z': self.scale_z
                 }
                 
                 # Save cache
@@ -118,6 +157,7 @@ class FlowFieldData:
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")
             raise
+    
     def get_snapshot(self, timestep: int) -> Optional[Snapshot]:
         """Retrieve snapshot by timestep"""
         return self.snapshots.get(timestep)
@@ -244,10 +284,19 @@ class FlowFieldVisualizer:
         Y, Z, (y_min, y_max, z_min, z_max) = self._prepare_interpolation_grid()
         fig, ax = plt.subplots(figsize=(12, 10))
         
-        # Add cylinder (if needed)
-        cylinder = plt.Circle((10e-6, 5e-6), 1e-6, 
-                                color='black', alpha=0.9, zorder=5)
-        ax.add_patch(cylinder)
+        from matplotlib.patches import Ellipse
+
+        # Add elliptical cylinder representation
+        ellipse = Ellipse(
+            xy=(self.flow_field.sphere_center_y, self.flow_field.sphere_center_z),
+            width=2 * self.flow_field.sphere_radius,  # Full width = 2 * semi-axis along y
+            height=2 * self.flow_field.sphere_radius * self.flow_field.scale_z,  # Full height = 2 * semi-axis along z
+            angle=0,
+            color='black',
+            alpha=0.1,
+            zorder=5
+        )
+        ax.add_patch(ellipse)
         
         # Get timesteps and data ranges
         timesteps = self.flow_field.get_timesteps()
@@ -437,115 +486,71 @@ def plot_interpolated_temperature(y_coords: np.ndarray,
     ax.set_aspect('equal')
     
     return fig, ax
-
-# def interpolate_2d_data(y_coords: np.ndarray,
-#                        z_coords: np.ndarray,
-#                        values: np.ndarray,
-#                        num_grid_points: int = 200) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-#     """
-#     Create a 2D interpolated grid from flattened data arrays.
-    
-#     Args:
-#         y_coords: Flattened array of y coordinates
-#         z_coords: Flattened array of z coordinates
-#         values: Flattened array of values at each (y,z) point
-#         num_grid_points: Number of points to use in each dimension for interpolation grid
-    
-#     Returns:
-#         yi: 2D array of interpolated y coordinates
-#         zi: 2D array of interpolated z coordinates
-#         interpolated_values: 2D array of interpolated values
-#     """
-#     # Ensure inputs are flattened
-#     y_coords = np.asarray(y_coords).flatten()
-#     z_coords = np.asarray(z_coords).flatten()
-#     values = np.asarray(values).flatten()
-    
-#     # Create regular grid
-#     y_min, y_max = y_coords.min(), y_coords.max()
-#     z_min, z_max = z_coords.min(), z_coords.max()
-    
-#     yi = np.linspace(y_min, y_max, num_grid_points)
-#     zi = np.linspace(z_min, z_max, num_grid_points)
-#     yi, zi = np.meshgrid(yi, zi)
-    
-#     # Interpolate values
-#     points = np.column_stack((y_coords, z_coords))
-#     interpolated_values = griddata(points, values, (yi, zi), 
-#                                  method='cubic', 
-#                                  fill_value=np.nan)
-    
-#     return yi, zi, interpolated_values
     
 def interpolate_2d_data(y_coords: np.ndarray,
                        z_coords: np.ndarray,
                        values: np.ndarray,
-                       num_grid_points: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                       num_grid_points: int = 100,
+                       sphere_center_y: float = None,
+                       sphere_center_z: float = None,
+                       sphere_radius: float = None,
+                       scale_z: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Create a 2D interpolated grid using a hybrid approach for better accuracy.
-    
+    Create a 2D interpolated grid from non-uniform data using a hybrid approach.
+    Optionally applies an elliptical mask to the interpolated grid.
+
     Args:
         y_coords: Flattened array of y coordinates
         z_coords: Flattened array of z coordinates
         values: Flattened array of values at each (y,z) point
-        num_grid_points: Number of points for interpolation grid
+        num_grid_points: Number of points for the interpolation grid
+        sphere_center_y: Y-coordinate of the ellipse center (optional)
+        sphere_center_z: Z-coordinate of the ellipse center (optional)
+        sphere_radius: Semi-major axis of the ellipse (optional)
+        scale_z: Scaling factor for the z-direction (optional)
+
+    Returns:
+        yi: 2D array of y coordinates on the uniform grid
+        zi: 2D array of z coordinates on the uniform grid
+        interpolated_values: 2D array of interpolated values
     """
     # Ensure inputs are flattened
     y_coords = np.asarray(y_coords).flatten()
     z_coords = np.asarray(z_coords).flatten()
     values = np.asarray(values).flatten()
-    
+
     # Create regular grid
     y_min, y_max = y_coords.min(), y_coords.max()
     z_min, z_max = z_coords.min(), z_coords.max()
-    
     yi = np.linspace(y_min, y_max, num_grid_points)
     zi = np.linspace(z_min, z_max, num_grid_points)
     yi, zi = np.meshgrid(yi, zi)
-    
+
     # Points for interpolation
     points = np.column_stack((y_coords, z_coords))
-    
-    # First pass: Use cubic interpolation
-    interpolated_cubic = griddata(points, values, (yi, zi), 
-                                method='cubic', 
-                                fill_value=np.nan)
-    
-    # Second pass: Use linear interpolation
-    interpolated_linear = griddata(points, values, (yi, zi), 
-                                 method='linear', 
-                                 fill_value=np.nan)
-    
-    # Third pass: Use nearest neighbor for remaining NaN values
-    interpolated_nearest = griddata(points, values, (yi, zi), 
-                                  method='nearest', 
-                                  fill_value=np.nan)
-    
-    # Combine results:
-    # 1. Use cubic where it's well-behaved (not NaN and within data range)
-    # 2. Use linear where cubic fails
-    # 3. Use nearest for remaining points
-    
-    # Get valid value range from input data
-    valid_min = np.nanmin(values)
-    valid_max = np.nanmax(values)
-    
-    # Create mask for invalid cubic interpolation results
-    cubic_mask = (np.isnan(interpolated_cubic) | 
-                 (interpolated_cubic < valid_min) | 
-                 (interpolated_cubic > valid_max))
-    
-    # Create final interpolated grid
-    interpolated_values = interpolated_cubic.copy()
-    
-    # Replace invalid cubic values with linear interpolation
-    linear_mask = cubic_mask & ~np.isnan(interpolated_linear)
-    interpolated_values[linear_mask] = interpolated_linear[linear_mask]
-    
-    # Fill remaining NaN values with nearest neighbor
+
+    # Perform interpolation (using existing hybrid approach)
+    interpolated_values = griddata(points, values, (yi, zi), method='cubic', fill_value=np.nan)
+    interpolated_linear = griddata(points, values, (yi, zi), method='linear', fill_value=np.nan)
+    interpolated_nearest = griddata(points, values, (yi, zi), method='nearest', fill_value=np.nan)
+
+    # Combine results: cubic -> linear -> nearest
+    valid_min, valid_max = np.nanmin(values), np.nanmax(values)
+    cubic_mask = (np.isnan(interpolated_values) | 
+                  (interpolated_values < valid_min) | 
+                  (interpolated_values > valid_max))
+    interpolated_values[cubic_mask] = interpolated_linear[cubic_mask]
     remaining_mask = np.isnan(interpolated_values)
     interpolated_values[remaining_mask] = interpolated_nearest[remaining_mask]
-    
+
+    # Apply elliptical mask if parameters are provided
+    if all(p is not None for p in [sphere_center_y, sphere_center_z, sphere_radius]):
+        dy = (yi - sphere_center_y) / sphere_radius
+        dz = (zi - sphere_center_z) / (sphere_radius * scale_z)
+        dist_sq = dy**2 + dz**2
+        mask = dist_sq <= 1.0
+        interpolated_values[mask] = 0.0  # Set to zero inside the ellipse
+
     return yi, zi, interpolated_values
 
 def get_time_series_at_location(flow_field: FlowFieldData, 

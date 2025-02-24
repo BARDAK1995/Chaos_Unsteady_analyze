@@ -6,10 +6,11 @@ from MS_unsteady_Analysis_lib import *
 
 # Initialize the visualizer
 flow_field = FlowFieldData(
-    "all_slices_x_2.00e-05.npz",
-    sphere_center_y=1.03e-5,   # Match visualization parameters
-    sphere_center_z=8.5e-6,
-    sphere_diameter=1e-6
+    npz_file="all_slices_x_2.00e-05.npz",
+    sphere_center_y=2.03e-5,  # Adjust to your obstacle’s y-center
+    sphere_center_z=2e-5,     # Adjust to your obstacle’s z-center
+    sphere_diameter=16e-6,    # Matches a sphere with radius 8e-6 meters
+    scale_z=0.3               # Matches z-scaling of 0.3 in your STL
 )
 visualizer = FlowFieldVisualizer(flow_field)
 

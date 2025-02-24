@@ -416,12 +416,14 @@ def process_plt_directory(directory_path, x_slice, output_filename, num_processe
 
 if __name__ == "__main__":
     # Configuration
-    directory_path = "outputsmall"
+    directory_path = "Analyze"
     x_slice = 2.0e-5  # Adjust this value as needed
     output_filename = f"all_slices_x_{x_slice:.2e}"  # Base name for output files
-
+    
     # Optional: specify number of processes (default is CPU count - 1)
     num_processes = None  # Set to a specific number if desired
-
+    if num_processes is None:
+        # Cap at 60 to avoid Windows handle limit in multiprocessing
+        num_processes = min(60, max(1, cpu_count() - 1))  # Leave one CPU free and ensure within handle limit
     # Process all PLT files and create both NPZ and NPY files
     process_plt_directory(directory_path, x_slice, output_filename, num_processes)

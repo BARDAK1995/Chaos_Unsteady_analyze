@@ -10,10 +10,11 @@ from MS_unsteady_Analysis_lib import *
 
 
 flow_field = FlowFieldData(
-    "all_slices_x_1.00e-05.npz",
-    sphere_center_y=1.03e-5,   # Match visualization parameters
-    sphere_center_z=7e-6,
-    sphere_diameter=6e-6
+    npz_file="all_slices_x_2.00e-05.npz",
+    sphere_center_y=2.03e-5,  # Adjust to your obstacle’s y-center
+    sphere_center_z=2e-5,     # Adjust to your obstacle’s z-center
+    sphere_diameter=16e-6,    # Matches a sphere with radius 8e-6 meters
+    scale_z=0.3               # Matches z-scaling of 0.3 in your STL
 )
 print_data_summary(flow_field)
 
@@ -47,8 +48,14 @@ visualize_snapshot(flow_field, timestep, field='vol', cmap='YlOrRd')
 y, z = snapshot.get_coordinates()
 temperature = snapshot.get_field_data('temperature')
 # Use helper function directly
-yi, zi, interpolated_temp = interpolate_2d_data(y, z, temperature)
-
+yi, zi, interpolated_temp = interpolate_2d_data(
+    y, z, temperature,
+    num_grid_points=100,
+    sphere_center_y=flow_field.sphere_center_y,
+    sphere_center_z=flow_field.sphere_center_z,
+    sphere_radius=flow_field.sphere_diameter / 2,
+    scale_z=flow_field.scale_z
+    )
 # Create custom visualization
 plt.figure(figsize=(10, 8))
 plt.pcolormesh(yi, zi, interpolated_temp, shading='auto', cmap='coolwarm')
@@ -63,7 +70,17 @@ Volume_data = get_field_snapshots(flow_field, 'vol')
 dx_scale = Volume_data**(1/3) * 10**6#microns
 A_x_scale = dx_scale**2
 A_x_scale_correction = A_x_scale / A_x_scale.max()
-yi, zi, interpolated_temp = interpolate_2d_data(y, z, A_x_scale_correction[10,:] )
+
+
+yi, zi, interpolated_temp = interpolate_2d_data(
+    y, z, A_x_scale_correction[10, :],
+    num_grid_points=100,
+    sphere_center_y=flow_field.sphere_center_y,
+    sphere_center_z=flow_field.sphere_center_z,
+    sphere_radius=flow_field.sphere_diameter / 2,
+    scale_z=flow_field.scale_z
+)
+
 # Create custom visualization
 plt.figure(figsize=(10, 8))
 plt.pcolormesh(yi, zi, interpolated_temp, shading='auto', cmap='coolwarm')
@@ -127,8 +144,15 @@ cylinder_diameter = 6e-6  # diameter
 for i in range(10):
     
     plt.figure(figsize=(10, 8))
-    yi, zi, interpolated_temp = interpolate_2d_data(y, z, 
-                                                np.abs(dmd.modes[:, i])/A_x_scale_correction[12,:])  # Add this parameter
+    yi, zi, interpolated_temp = interpolate_2d_data(
+        y, z, 
+        np.abs(dmd.modes[:, i]) / A_x_scale_correction[12, :],
+        num_grid_points=100,
+        sphere_center_y=flow_field.sphere_center_y,
+        sphere_center_z=flow_field.sphere_center_z,
+        sphere_radius=flow_field.sphere_diameter / 2,
+        scale_z=flow_field.scale_z
+    )
     # yi, zi, interpolated_temp = interpolate_2d_data(y, z, 
     #                                             (dmd.modes[:, i]).real/A_x_scale_correction[12,:])
     im = plt.pcolormesh(yi, zi, interpolated_temp, shading='auto', cmap='coolwarm')
