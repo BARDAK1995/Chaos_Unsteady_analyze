@@ -659,12 +659,13 @@ def plot_interpolated_field(y_coords: np.ndarray,
     return fig, ax
 
 def visualize_snapshot(flow_field: FlowFieldData, 
-                      timestep: int,
-                      field: str,
-                      show_scatter: bool = True,
-                      cmap: str = 'coolwarm') -> None:
+                       timestep: int,
+                       field: str,
+                       show_scatter: bool = True,
+                       cmap: str = 'coolwarm') -> None:
     """
     Visualize a specific field snapshot with both interpolation and original points.
+    Applies elliptical masking to the interpolated data.
     
     Args:
         flow_field: FlowFieldData object containing the snapshots
@@ -686,20 +687,30 @@ def visualize_snapshot(flow_field: FlowFieldData,
     y, z = snapshot.get_coordinates()
     field_data = snapshot.get_field_data(field)
     
+    # Interpolate data with elliptical masking
+    yi, zi, interpolated_data = interpolate_2d_data(
+        y, z, field_data,
+        num_grid_points=100,  # Adjust as needed
+        sphere_center_y=flow_field.sphere_center_y,
+        sphere_center_z=flow_field.sphere_center_z,
+        sphere_radius=flow_field.sphere_diameter / 2,
+        scale_z=flow_field.scale_z
+    )
+    
     if show_scatter:
         # Create figure with two subplots
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
         # Plot interpolated field
-        plot_interpolated_field(y, z, field_data, 
-                              field_name=field,
-                              title=f"Interpolated {field} Field (t={timestep})",
-                              cmap=cmap,
-                              figsize=(15, 6))
+        im = ax1.pcolormesh(yi, zi, interpolated_data, shading='auto', cmap=cmap)
+        plt.colorbar(im, ax=ax1, label=field)
+        ax1.set_aspect('equal')
+        ax1.set_title(f"Interpolated {field} Field (t={timestep})")
+        ax1.set_xlabel('Y Position')
+        ax1.set_ylabel('Z Position')
         
         # Plot original points
-        scatter = ax2.scatter(y, z, c=field_data, 
-                            cmap=cmap, s=20)
+        scatter = ax2.scatter(y, z, c=field_data, cmap=cmap, s=20)
         plt.colorbar(scatter, ax=ax2, label=field)
         ax2.set_aspect('equal')
         ax2.set_title(f"Original Data Points (t={timestep})")
@@ -708,10 +719,13 @@ def visualize_snapshot(flow_field: FlowFieldData,
         
     else:
         # Plot only interpolated field
-        plot_interpolated_field(y, z, field_data,
-                              field_name=field,
-                              title=f"{field} Field (t={timestep})",
-                              cmap=cmap)
+        fig, ax = plt.subplots(figsize=(10, 8))
+        im = ax.pcolormesh(yi, zi, interpolated_data, shading='auto', cmap=cmap)
+        plt.colorbar(im, ax=ax, label=field)
+        ax.set_aspect('equal')
+        ax.set_title(f"{field} Field (t={timestep})")
+        ax.set_xlabel('Y Position')
+        ax.set_ylabel('Z Position')
     
     plt.tight_layout()
     plt.show()
